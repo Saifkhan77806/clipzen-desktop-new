@@ -108,3 +108,30 @@ button {
     .empty-state p {
         margin: 0 0 16px;
     }
+
+
+.pending-item {
+    margin-top: 20px;
+    padding: 16px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+}
+
+.pending-content {
+    margin-bottom: 16px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+    .pending-content p {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: #111827;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+
+.muted {
+    color: #6b7280;
+}
