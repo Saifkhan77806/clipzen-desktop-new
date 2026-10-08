@@ -2,7 +2,11 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { supabase } from "../supabase";
-
+import { Navbar } from "@/components/dashboard/Navbar";
+import { Sidebar } from "@/components/dashboard/Sidebar";
+import { DashboardHome } from "@/components/dashboard/DashboardHome";
+import { getDevices } from "@/lib/api/devices";
+import type { Device } from "@/lib/api/devices";
 import "./App.css";
 
 type ClipboardChangedPayload = {
@@ -56,6 +60,8 @@ function App() {
   const [testingKeys, setTestingKeys] = useState(false);
 
   const [loadingDeviceId, setLoadingDeviceId] = useState(false);
+
+  const [devices, setDevices] = useState<Device[]>([]);
 
   /*
    * =====================================================
@@ -400,6 +406,15 @@ function App() {
     loadPendingClipboard();
   }, []);
 
+  useEffect(() => {
+    if (!authenticated) {
+      setDevices([]);
+      return;
+    }
+
+    loadDevices();
+  }, [authenticated]);
+
   /*
    * =====================================================
    * READ CURRENT CLIPBOARD
@@ -484,6 +499,26 @@ function App() {
     // functionality remains unchanged.
   };
 
+  const loadDevices = async () => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        setDevices([]);
+        return;
+      }
+
+      const nextDevices = await getDevices(session.access_token);
+
+      setDevices(nextDevices);
+    } catch (error) {
+      console.error("CLIPZEN: Failed to load devices:", error);
+      setDevices([]);
+    }
+  };
+
   /*
    * =====================================================
    * UI
@@ -491,215 +526,194 @@ function App() {
    */
 
   return (
-    <main className="app">
-      {/* Header */}
-      <header className="header">
-        <div>
-          <h1>CLIPZEN</h1>
-
-          <p>Copy Once. Everywhere.</p>
-        </div>
-
-        <div className="status">
-          <span className="status-dot" />
-
-          <span>Clipboard monitoring</span>
-        </div>
-      </header>
-
-      <section className="content">
-        {/* Account */}
-        <div className="card">
-          <h2>Account</h2>
-
-          {authLoading ? (
-            <p className="muted">Checking account...</p>
-          ) : authenticated ? (
-            <>
-              <p>
-                Signed in as <strong>{authEmail}</strong>
-              </p>
-
-              {authMessage && <p className="security-result">{authMessage}</p>}
-
-              <button onClick={signOut}>Sign Out</button>
-            </>
-          ) : (
-            <>
-              <div
-                style={{
-                  display: "flex",
-                  gap: "8px",
-                  marginBottom: "16px",
-                }}
-              >
-                <button
-                  onClick={() => {
-                    setAuthMode("login");
-                    setAuthError(null);
-                    setAuthMessage(null);
-                  }}
-                  disabled={authMode === "login"}
-                >
-                  Login
-                </button>
-
-                <button
-                  onClick={() => {
-                    setAuthMode("register");
-                    setAuthError(null);
-                    setAuthMessage(null);
-                  }}
-                  disabled={authMode === "register"}
-                >
-                  Register
-                </button>
-              </div>
-
-              <div>
-                <input
-                  type="email"
-                  placeholder="Email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  disabled={authSubmitting}
-                />
-
-                <input
-                  type="password"
-                  placeholder="Password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  disabled={authSubmitting}
-                />
-
-                {authMode === "register" && (
-                  <input
-                    type="password"
-                    placeholder="Confirm password"
-                    value={confirmPassword}
-                    onChange={(event) => setConfirmPassword(event.target.value)}
-                    disabled={authSubmitting}
-                  />
-                )}
-
-                <button
-                  onClick={authMode === "login" ? signIn : registerAccount}
-                  disabled={authSubmitting}
-                >
-                  {authSubmitting
-                    ? "Please wait..."
-                    : authMode === "login"
-                      ? "Login"
-                      : "Create Account"}
-                </button>
-
-                {authError && <p className="security-result">{authError}</p>}
-
-                {authMessage && (
-                  <p className="security-result">{authMessage}</p>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Current Clipboard */}
-        <div className="card">
-          <h2>Current Clipboard</h2>
-
-          <div className="clipboard-preview">
-            {clipboardText ? (
-              <p>{clipboardText}</p>
-            ) : (
-              <p className="muted">Copy something to your clipboard.</p>
-            )}
-          </div>
-
-          <button onClick={refreshClipboard}>Refresh Clipboard</button>
-        </div>
-
-        {/* Connected Devices */}
-        <div className="card">
-          <h2>Connected Devices</h2>
-
-          <div className="empty-state">
-            <p>No devices connected</p>
-
-            <button>Pair a Device</button>
-          </div>
-        </div>
-
-        {/* Device Security */}
-        <div className="card">
-          <h2>Device Security</h2>
-
-          <div className="device-security">
-            <div className="security-section">
-              <h3>Private Key Storage</h3>
-
-              <p className="muted">
-                Device private keys are stored securely on this Windows machine.
-              </p>
-
-              <button onClick={testSecureKeyStorage} disabled={testingKeys}>
-                {testingKeys ? "Testing..." : "Test Secure Key Storage"}
-              </button>
-
-              {keyStorageStatus && (
-                <p className="security-result">{keyStorageStatus}</p>
-              )}
+    <div className="min-h-screen bg-slate-50">
+      {authLoading ? (
+        <div className="flex min-h-screen items-center justify-center bg-slate-50">
+          <div className="text-center">
+            <div className="mx-auto flex size-10 items-center justify-center rounded-xl bg-slate-950 text-white">
+              <span className="text-sm font-semibold">C</span>
             </div>
 
-            <div className="security-section">
-              <h3>Device Identity</h3>
+            <p className="mt-4 text-sm font-medium text-slate-700">
+              Loading CLIPZEN...
+            </p>
 
-              <p className="muted">Permanent CLIPZEN device identifier.</p>
+            <p className="mt-1 text-xs text-slate-400">
+              Preparing your workspace
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <Navbar
+            authenticated={authenticated}
+            email={authEmail ?? undefined}
+            onSignOut={signOut}
+            onGetStarted={() => {
+              setAuthMode("register");
+              setAuthError(null);
+              setAuthMessage(null);
+            }}
+          />
 
-              <button onClick={loadDeviceId} disabled={loadingDeviceId}>
-                {loadingDeviceId ? "Loading..." : "Get Device ID"}
-              </button>
+          {authenticated ? (
+            <div className="flex min-h-[calc(100vh-72px)]">
+              <Sidebar />
 
-              {deviceId && (
-                <div className="device-id">
-                  <span>{deviceId}</span>
+              <DashboardHome devices={devices} />
+            </div>
+          ) : (
+            <main className="flex min-h-[calc(100vh-72px)] items-center justify-center px-6 py-12">
+              <div className="w-full max-w-md">
+                <div className="rounded-3xl border border-slate-200/80 bg-white p-8 shadow-sm shadow-slate-200/50">
+                  <div className="mb-8">
+                    <p className="text-sm font-medium text-slate-500">
+                      Welcome to CLIPZEN
+                    </p>
+
+                    <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                      {authMode === "login"
+                        ? "Sign in to your workspace"
+                        : "Create your CLIPZEN account"}
+                    </h1>
+
+                    <p className="mt-2 text-sm leading-relaxed text-slate-500">
+                      {authMode === "login"
+                        ? "Connect your devices and keep your clipboard available everywhere."
+                        : "Create an account to securely connect your devices."}
+                    </p>
+                  </div>
+
+                  <div className="mb-6 grid grid-cols-2 rounded-xl bg-slate-100 p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("login");
+                        setAuthError(null);
+                        setAuthMessage(null);
+                      }}
+                      className={[
+                        "rounded-lg px-3 py-2 text-sm font-medium transition",
+                        authMode === "login"
+                          ? "bg-white text-slate-950 shadow-sm"
+                          : "text-slate-500 hover:text-slate-800",
+                      ].join(" ")}
+                    >
+                      Login
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("register");
+                        setAuthError(null);
+                        setAuthMessage(null);
+                      }}
+                      className={[
+                        "rounded-lg px-3 py-2 text-sm font-medium transition",
+                        authMode === "register"
+                          ? "bg-white text-slate-950 shadow-sm"
+                          : "text-slate-500 hover:text-slate-800",
+                      ].join(" ")}
+                    >
+                      Register
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label
+                        htmlFor="email"
+                        className="mb-2 block text-xs font-medium text-slate-700"
+                      >
+                        Email
+                      </label>
+
+                      <input
+                        id="email"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={(event) => setEmail(event.target.value)}
+                        disabled={authSubmitting}
+                        className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="password"
+                        className="mb-2 block text-xs font-medium text-slate-700"
+                      >
+                        Password
+                      </label>
+
+                      <input
+                        id="password"
+                        type="password"
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                        disabled={authSubmitting}
+                        className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                    </div>
+
+                    {authMode === "register" && (
+                      <div>
+                        <label
+                          htmlFor="confirm-password"
+                          className="mb-2 block text-xs font-medium text-slate-700"
+                        >
+                          Confirm password
+                        </label>
+
+                        <input
+                          id="confirm-password"
+                          type="password"
+                          placeholder="••••••••"
+                          value={confirmPassword}
+                          onChange={(event) =>
+                            setConfirmPassword(event.target.value)
+                          }
+                          disabled={authSubmitting}
+                          className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        />
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={authMode === "login" ? signIn : registerAccount}
+                      disabled={authSubmitting}
+                      className="h-11 w-full rounded-xl bg-slate-950 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {authSubmitting
+                        ? "Please wait..."
+                        : authMode === "login"
+                          ? "Sign in"
+                          : "Create account"}
+                    </button>
+                  </div>
+
+                  {authError && (
+                    <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                      {authError}
+                    </div>
+                  )}
+
+                  {authMessage && (
+                    <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                      {authMessage}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-
-            <button onClick={getDevicePublicKeys}>Get Public Keys</button>
-          </div>
-        </div>
-
-        {/* Pending Clipboard */}
-        <div className="card">
-          <h2>Pending Clipboard</h2>
-
-          {pendingClipboard ? (
-            <div className="pending-item">
-              <div className="pending-content">
-                <p>{pendingClipboard.text}</p>
               </div>
-
-              <button onClick={sendPendingClipboard}>SEND</button>
-            </div>
-          ) : (
-            <div className="empty-state">
-              <p>No pending clipboard items</p>
-            </div>
+            </main>
           )}
-        </div>
-
-        {/* Recent Activity */}
-        <div className="card">
-          <h2>Recent Activity</h2>
-
-          <div className="empty-state">
-            <p>No recent activity</p>
-          </div>
-        </div>
-      </section>
-    </main>
+        </>
+      )}
+    </div>
   );
 }
 
