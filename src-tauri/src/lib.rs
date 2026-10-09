@@ -23,13 +23,27 @@ use tungstenite::{client::ClientRequestBuilder, connect, Message};
 
 #[derive(Debug, Clone, Serialize)]
 struct PendingClipboard {
+    #[serde(rename = "deliveryId")]
     delivery_id: String,
+
+    #[serde(rename = "clipboardItemId")]
     clipboard_item_id: String,
+
+    #[serde(rename = "sourceDeviceId")]
     source_device_id: String,
+
+    text: Option<String>,
+
     ciphertext: String,
     nonce: String,
+
+    #[serde(rename = "authenticationTag")]
     authentication_tag: String,
+
+    #[serde(rename = "encryptionAlgorithm")]
     encryption_algorithm: String,
+
+    #[serde(rename = "keyVersion")]
     key_version: u32,
 }
 
@@ -105,6 +119,71 @@ fn get_pending_clipboard(state: tauri::State<'_, ClipboardState>) -> Option<Pend
         .lock()
         .ok()
         .and_then(|pending| pending.clone())
+}
+
+#[tauri::command]
+fn decrypt_pending_clipboard(
+    state: tauri::State<'_, ClipboardState>,
+) -> Result<Option<String>, String> {
+    let pending = state
+        .pending
+        .lock()
+        .map_err(|_| "Failed to lock pending clipboard state".to_string())?;
+
+    let Some(pending) = pending.as_ref() else {
+        return Ok(None);
+    };
+
+    let private_key = secure_storage::load_key_agreement_private_key()?;
+
+    let text = crypto::decrypt_clipboard(
+        &pending.ciphertext,
+        &pending.nonce,
+        &pending.authentication_tag,
+        &private_key,
+    )?;
+
+    Ok(Some(text))
+}
+
+#[tauri::command]
+fn apply_pending_clipboard(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, ClipboardState>,
+) -> Result<(), String> {
+    let pending = state
+        .pending
+        .lock()
+        .map_err(|_| "Failed to lock pending clipboard state".to_string())?
+        .clone();
+
+    let Some(pending) = pending else {
+        return Err("No pending clipboard delivery".to_string());
+    };
+
+    let private_key = secure_storage::load_key_agreement_private_key()?;
+
+    let text = crypto::decrypt_clipboard(
+        &pending.ciphertext,
+        &pending.nonce,
+        &pending.authentication_tag,
+        &private_key,
+    )?;
+
+    let mut clipboard =
+        Clipboard::new().map_err(|error| format!("Failed to open clipboard: {}", error))?;
+
+    clipboard
+        .set_text(text.clone())
+        .map_err(|error| format!("Failed to write clipboard: {}", error))?;
+
+    if let Ok(mut remote_clipboard) = app_handle.state::<ClipboardState>().remote_clipboard.lock() {
+        *remote_clipboard = Some(text);
+    }
+
+    println!("CLIPZEN: Accepted clipboard applied locally");
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -291,6 +370,7 @@ fn handle_websocket_message(app_handle: &tauri::AppHandle, message: Message) {
                         delivery_id: delivery.delivery_id,
                         clipboard_item_id: delivery.clipboard_item_id,
                         source_device_id: delivery.source_device_id,
+                        text: None,
                         ciphertext: delivery.payload.ciphertext,
                         nonce: delivery.payload.nonce,
                         authentication_tag: delivery.payload.authentication_tag,
@@ -765,7 +845,9 @@ pub fn run() {
             get_device_id,
             get_device_public_keys,
             register_device_with_backend,
-            start_authenticated_websocket
+            start_authenticated_websocket,
+            decrypt_pending_clipboard,
+            apply_pending_clipboard,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CLIPZEN");

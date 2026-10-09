@@ -1,8 +1,8 @@
 import { ArrowDownToLine, ArrowUpFromLine, Check, Clock3 } from "lucide-react";
 
-type ActivityStatus = "sent" | "received" | "pending";
+export type ActivityStatus = "sent" | "received" | "pending";
 
-type ActivityItem = {
+export type ActivityItem = {
   id: string;
   type: ActivityStatus;
   title: string;
@@ -11,7 +11,7 @@ type ActivityItem = {
 };
 
 type ActivityCardProps = {
-  items?: ActivityItem[];
+  items: ActivityItem[];
 };
 
 const activityConfig = {
@@ -32,7 +32,7 @@ const activityConfig = {
   },
 };
 
-export function ActivityCard({ items = [] }: ActivityCardProps) {
+export function ActivityCard({ items }: ActivityCardProps) {
   return (
     <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm shadow-slate-200/40">
       <div className="flex items-center justify-between">

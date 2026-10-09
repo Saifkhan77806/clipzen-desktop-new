@@ -5,15 +5,37 @@ import { supabase } from "../supabase";
 import { Navbar } from "@/components/dashboard/Navbar";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { DashboardHome } from "@/components/dashboard/DashboardHome";
-import { getDevices } from "@/lib/api/devices";
+import {
+  acceptPairing,
+  createPairing,
+  getDevices,
+  type CreatePairingResponse,
+} from "@/lib/api/devices";
 import type { Device } from "@/lib/api/devices";
+import type { ActivityItem } from "@/components/dashboard/ActivityCard";
+import {
+  acceptClipboardDelivery,
+  declineClipboardDelivery,
+  markClipboardDeliveryApplied,
+  getClipboardStatus,
+  sendClipboard,
+  type ClipboardDeliveryStatus,
+} from "@/lib/api/clipboard";
 import "./App.css";
 
 type ClipboardChangedPayload = {
   text: string;
 };
 
+type ClipboardDeliveryReceivedPayload = {
+  deliveryId: string;
+  clipboardItemId: string;
+  sourceDeviceId: string;
+};
+
 type PendingClipboard = {
+  deliveryId?: string;
+  clipboardItemId?: string;
   text: string;
 };
 
@@ -31,6 +53,7 @@ function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
 
   const [authenticated, setAuthenticated] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
 
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -63,6 +86,24 @@ function App() {
 
   const [devices, setDevices] = useState<Device[]>([]);
 
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
+
+  const [clipboardStatus, setClipboardStatus] =
+    useState<ClipboardDeliveryStatus>("pending");
+
+  const [clipboardItemId, setClipboardItemId] = useState<string | null>(null);
+
+  const [pairingResult, setPairingResult] =
+    useState<CreatePairingResponse | null>(null);
+
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+
+  const [pairingAcceptLoading, setPairingAcceptLoading] = useState(false);
+  const [pairingAcceptError, setPairingAcceptError] = useState<string | null>(
+    null,
+  );
+
   /*
    * =====================================================
    * LOAD SUPABASE SESSION
@@ -84,6 +125,8 @@ function App() {
 
         if (session) {
           console.log("CLIPZEN: Existing Supabase session found");
+
+          setAccessToken(session.access_token);
 
           console.log(
             "CLIPZEN: Starting device initialization from existing session",
@@ -112,7 +155,7 @@ function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setAuthenticated(!!session);
-
+      setAccessToken(session?.access_token ?? null);
       setAuthEmail(session?.user.email ?? null);
     });
 
@@ -157,6 +200,8 @@ function App() {
       if (!data.session) {
         throw new Error("Login succeeded but no session was returned.");
       }
+
+      setAccessToken(data.session.access_token);
 
       const deviceRegistered = await registerDeviceAfterLogin(
         data.session.access_token,
@@ -232,8 +277,8 @@ function App() {
        */
 
       if (data.session) {
+        setAccessToken(data.session.access_token);
         setAuthenticated(true);
-
         setAuthEmail(data.user?.email ?? null);
 
         setAuthMessage("Account created successfully.");
@@ -274,6 +319,7 @@ function App() {
       }
 
       setAuthenticated(false);
+      setAccessToken(null);
       setAuthEmail(null);
       setPassword("");
       setConfirmPassword("");
@@ -325,6 +371,75 @@ function App() {
     }
   };
 
+  const handlePairDevice = async () => {
+    setPairingError(null);
+    setPairingResult(null);
+
+    if (!deviceId) {
+      setPairingError(
+        "This device is not registered yet. Please wait and try again.",
+      );
+      return;
+    }
+
+    setPairingLoading(true);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        throw new Error("Please sign in before pairing a device.");
+      }
+
+      const result = await createPairing(session.access_token, deviceId);
+
+      setPairingResult(result);
+    } catch (error) {
+      setPairingError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  const handleAcceptPairing = async (pairingToken: string) => {
+    setPairingAcceptError(null);
+
+    if (!deviceId) {
+      setPairingAcceptError(
+        "This device is not registered yet. Please wait and try again.",
+      );
+      return;
+    }
+
+    setPairingAcceptLoading(true);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        throw new Error("Please sign in before pairing a device.");
+      }
+
+      await acceptPairing(session.access_token, deviceId, pairingToken);
+
+      const updatedDevices = await getDevices(session.access_token);
+      setDevices(updatedDevices);
+      setPairingResult(null);
+
+      setPairingAcceptError(null);
+    } catch (error) {
+      setPairingAcceptError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setPairingAcceptLoading(false);
+    }
+  };
+
   /*
    * =====================================================
    * DEVICE PUBLIC KEYS
@@ -353,6 +468,18 @@ function App() {
     }
   };
 
+  const addActivity = (item: Omit<ActivityItem, "id">) => {
+    setActivity((current) =>
+      [
+        {
+          ...item,
+          id: crypto.randomUUID(),
+        },
+        ...current,
+      ].slice(0, 8),
+    );
+  };
+
   /*
    * =====================================================
    * CLIPBOARD LISTENER
@@ -360,10 +487,11 @@ function App() {
    */
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let unlistenClipboard: (() => void) | undefined;
+    let unlistenDelivery: (() => void) | undefined;
 
-    const setupClipboardListener = async () => {
-      unlisten = await listen<ClipboardChangedPayload>(
+    const setupListeners = async () => {
+      unlistenClipboard = await listen<ClipboardChangedPayload>(
         "clipboard-changed",
         (event) => {
           console.log("CLIPZEN: Clipboard changed:", event.payload.text);
@@ -373,14 +501,72 @@ function App() {
           setPendingClipboard({
             text: event.payload.text,
           });
+
+          addActivity({
+            type: "pending",
+            title: "New clipboard item",
+            device: "This device",
+            time: "Just now",
+          });
+        },
+      );
+
+      unlistenDelivery = await listen<ClipboardDeliveryReceivedPayload>(
+        "clipboard-delivery-received",
+        (event) => {
+          console.log(
+            "CLIPZEN: Clipboard delivery received:",
+            event.payload.deliveryId,
+            event.payload.clipboardItemId,
+          );
+
+          setClipboardItemId(event.payload.clipboardItemId);
+          setClipboardStatus("received");
+
+          void (async () => {
+            try {
+              const text = await invoke<string | null>(
+                "decrypt_pending_clipboard",
+              );
+
+              if (text === null) {
+                console.error(
+                  "CLIPZEN: Pending clipboard could not be decrypted.",
+                );
+                return;
+              }
+
+              setPendingClipboard({
+                deliveryId: event.payload.deliveryId,
+                clipboardItemId: event.payload.clipboardItemId,
+                text,
+              });
+            } catch (error) {
+              console.error(
+                "CLIPZEN: Failed to decrypt pending clipboard:",
+                error,
+              );
+            }
+          })();
+
+          addActivity({
+            type: "received",
+            title: "Clipboard received",
+            device:
+              devices.find(
+                (device) => device.id === event.payload.sourceDeviceId,
+              )?.deviceName ?? "Another device",
+            time: "Just now",
+          });
         },
       );
     };
 
-    setupClipboardListener();
+    setupListeners();
 
     return () => {
-      unlisten?.();
+      unlistenClipboard?.();
+      unlistenDelivery?.();
     };
   }, []);
 
@@ -405,6 +591,32 @@ function App() {
 
     loadPendingClipboard();
   }, []);
+
+  useEffect(() => {
+    if (!clipboardItemId || !accessToken) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadClipboardStatus = async () => {
+      try {
+        const result = await getClipboardStatus(accessToken, clipboardItemId);
+
+        if (!cancelled) {
+          setClipboardStatus(result.status);
+        }
+      } catch (error) {
+        console.error("CLIPZEN: Failed to load clipboard status:", error);
+      }
+    };
+
+    loadClipboardStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clipboardItemId, accessToken]);
 
   useEffect(() => {
     if (!authenticated) {
@@ -488,15 +700,94 @@ function App() {
    * =====================================================
    */
 
-  const sendPendingClipboard = () => {
-    if (!pendingClipboard) {
+  const sendPendingClipboard = async () => {
+    if (!pendingClipboard || !accessToken || !deviceId) {
       return;
     }
 
-    console.log("CLIPZEN: Manual SEND requested:", pendingClipboard.text);
+    try {
+      setClipboardStatus("sent");
 
-    // Existing backend/WebSocket sending
-    // functionality remains unchanged.
+      const result = await sendClipboard(
+        accessToken,
+        deviceId,
+        pendingClipboard.text,
+      );
+
+      setClipboardItemId(result.clipboardItemId);
+
+      setClipboardStatus(result.deliverySummary.sent > 0 ? "sent" : "pending");
+
+      setPendingClipboard(null);
+
+      addActivity({
+        type: "sent",
+        title: "Clipboard sent",
+        device: "Paired devices",
+        time: "Just now",
+      });
+    } catch (error) {
+      console.error("CLIPZEN: Failed to send clipboard:", error);
+
+      setClipboardStatus("failed");
+    }
+  };
+
+  const acceptPendingClipboard = async () => {
+    if (!pendingClipboard?.deliveryId || !accessToken) {
+      return;
+    }
+
+    try {
+      setClipboardStatus("accepted");
+
+      await acceptClipboardDelivery(accessToken, pendingClipboard.deliveryId);
+
+      await invoke("apply_pending_clipboard");
+
+      await markClipboardDeliveryApplied(
+        accessToken,
+        pendingClipboard.deliveryId,
+      );
+
+      setClipboardStatus("applied");
+
+      setClipboardText(pendingClipboard.text);
+
+      addActivity({
+        type: "received",
+        title: "Clipboard applied",
+        device: "This device",
+        time: "Just now",
+      });
+    } catch (error) {
+      console.error("CLIPZEN: Failed to accept clipboard:", error);
+
+      setClipboardStatus("failed");
+    }
+  };
+
+  const declinePendingClipboard = async () => {
+    if (!pendingClipboard?.deliveryId || !accessToken) {
+      return;
+    }
+
+    try {
+      await declineClipboardDelivery(accessToken, pendingClipboard.deliveryId);
+
+      setClipboardStatus("declined");
+      setPendingClipboard(null);
+      setClipboardItemId(null);
+
+      addActivity({
+        type: "received",
+        title: "Clipboard declined",
+        device: "This device",
+        time: "Just now",
+      });
+    } catch (error) {
+      console.error("CLIPZEN: Failed to decline clipboard:", error);
+    }
   };
 
   const loadDevices = async () => {
@@ -560,7 +851,24 @@ function App() {
             <div className="flex min-h-[calc(100vh-72px)]">
               <Sidebar />
 
-              <DashboardHome devices={devices} />
+              <DashboardHome
+                devices={devices}
+                clipboardText={clipboardText}
+                onRefreshClipboard={refreshClipboard}
+                pendingClipboard={pendingClipboard}
+                onSendPendingClipboard={sendPendingClipboard}
+                clipboardStatus={clipboardStatus}
+                onAcceptPendingClipboard={acceptPendingClipboard}
+                onDeclinePendingClipboard={declinePendingClipboard}
+                activity={activity}
+                onPairDevice={handlePairDevice}
+                pairingResult={pairingResult}
+                pairingLoading={pairingLoading}
+                pairingError={pairingError}
+                onAcceptPairing={handleAcceptPairing}
+                pairingAcceptLoading={pairingAcceptLoading}
+                pairingAcceptError={pairingAcceptError}
+              />
             </div>
           ) : (
             <main className="flex min-h-[calc(100vh-72px)] items-center justify-center px-6 py-12">
